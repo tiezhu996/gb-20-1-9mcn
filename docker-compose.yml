@@ -44,8 +44,7 @@ services:
     networks:
       - timetable_network
     command: >
-      sh -c "python manage.py makemigrations &&
-             python manage.py migrate &&
+      sh -c "python manage.py migrate --fake-initial &&
              python manage.py runserver 0.0.0.0:8000"
 
   frontend:

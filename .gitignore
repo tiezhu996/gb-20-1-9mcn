@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.sqlite3
+.venv/
+venv/
+staticfiles/
+
+# Node / Angular
+node_modules/
+.angular/
+dist/
+out-tsc/
+
+# Environment
+.env
+.env.local
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

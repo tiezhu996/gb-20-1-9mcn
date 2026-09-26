@@ -83,6 +83,14 @@ export interface ScheduleEntry {
   conflict_type?: string;
   original_teacher?: number;
   original_teacher_name?: string;
+  effective_teacher?: number;
+  effective_teacher_name?: string;
+  scheduled_teacher?: number;
+  scheduled_teacher_name?: string;
+  has_active_substitute?: boolean;
+  substitute_start_date?: string | null;
+  substitute_end_date?: string | null;
+  substitute_reason?: string | null;
   course_name?: string;
   teacher_name?: string;
   classroom_name?: string;
@@ -130,6 +138,10 @@ export interface Substitute {
   is_active: boolean;
   original_teacher_name?: string;
   substitute_teacher_name?: string;
+  course_name?: string;
+  class_name?: string;
+  day_of_week?: number;
+  period?: number;
   created_at?: string;
   updated_at?: string;
 }

@@ -56,6 +56,33 @@ mat-sidenav {
   min-width: 200px;
 }
 
+.substitute-form {
+  margin-bottom: 20px;
+  border-left: 4px solid #7b1fa2;
+}
+
+.substitute-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0 16px;
+  align-items: start;
+}
+
+.substitute-reason {
+  min-width: 240px;
+}
+
+.substitute-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.substitute-error {
+  color: #c62828;
+  margin: 0 0 12px;
+}
+
 .timetable-container {
   background: white;
   border-radius: 4px;

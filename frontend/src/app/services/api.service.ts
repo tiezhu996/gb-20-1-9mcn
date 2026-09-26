@@ -107,29 +107,33 @@ export class ApiService {
     return this.http.delete<void>(`${this.baseUrl}/class-courses/${id}/`);
   }
 
-  getSchedulesBySemester(semesterId: number): Observable<ScheduleEntry[]> {
-    const params = new HttpParams().set('semester_id', semesterId.toString());
+  getSchedulesBySemester(semesterId: number, date?: string): Observable<ScheduleEntry[]> {
+    let params = new HttpParams().set('semester_id', semesterId.toString());
+    if (date) params = params.set('date', date);
     return this.http.get<ScheduleEntry[]>(`${this.baseUrl}/schedules/by_semester/`, { params });
   }
 
-  getSchedulesByClass(semesterId: number, classId: number): Observable<ScheduleEntry[]> {
-    const params = new HttpParams()
+  getSchedulesByClass(semesterId: number, classId: number, date?: string): Observable<ScheduleEntry[]> {
+    let params = new HttpParams()
       .set('semester_id', semesterId.toString())
       .set('class_id', classId.toString());
+    if (date) params = params.set('date', date);
     return this.http.get<ScheduleEntry[]>(`${this.baseUrl}/schedules/by_class/`, { params });
   }
 
-  getSchedulesByTeacher(semesterId: number, teacherId: number): Observable<ScheduleEntry[]> {
-    const params = new HttpParams()
+  getSchedulesByTeacher(semesterId: number, teacherId: number, date?: string): Observable<ScheduleEntry[]> {
+    let params = new HttpParams()
       .set('semester_id', semesterId.toString())
       .set('teacher_id', teacherId.toString());
+    if (date) params = params.set('date', date);
     return this.http.get<ScheduleEntry[]>(`${this.baseUrl}/schedules/by_teacher/`, { params });
   }
 
-  getSchedulesByClassroom(semesterId: number, classroomId: number): Observable<ScheduleEntry[]> {
-    const params = new HttpParams()
+  getSchedulesByClassroom(semesterId: number, classroomId: number, date?: string): Observable<ScheduleEntry[]> {
+    let params = new HttpParams()
       .set('semester_id', semesterId.toString())
       .set('classroom_id', classroomId.toString());
+    if (date) params = params.set('date', date);
     return this.http.get<ScheduleEntry[]>(`${this.baseUrl}/schedules/by_classroom/`, { params });
   }
 
@@ -174,11 +178,12 @@ export class ApiService {
     return this.http.get<Substitute[]>(`${this.baseUrl}/substitutes/`);
   }
 
-  exportPdf(semesterId: number, type: 'class' | 'teacher' | 'classroom', id: number): Observable<Blob> {
-    const params = new HttpParams()
+  exportPdf(semesterId: number, type: 'class' | 'teacher' | 'classroom', id: number, date?: string): Observable<Blob> {
+    let params = new HttpParams()
       .set('semester_id', semesterId.toString())
       .set('type', type)
       .set('id', id.toString());
+    if (date) params = params.set('date', date);
     return this.http.get(`${this.baseUrl}/schedules/export_pdf/`, {
       params,
       responseType: 'blob'

@@ -81,7 +81,7 @@ npm start
 | 自动排课 | 基于约束满足问题(CSP)的智能排课算法 |
 | 手动调整 | 支持锁定课程、拖拽调整（后端API就绪） |
 | 冲突检测 | 自动检测教师/教室/班级三类时间冲突 |
-| 调课代课 | 支持课程交换和教师代课安排 |
+| 调课代课 | 支持课程交换和带起止日期的代课安排；代课期内显示实际与原任教师，到期自动恢复 |
 | 课表查看 | 班级/教师/教室三种视角的课表展示 |
 | 导出功能 | PDF 导出（ReportLab）和图片导出（html2canvas） |
 
@@ -259,14 +259,14 @@ docker compose exec backend python manage.py createsuperuser
 | `/api/courses/` | GET/POST/PUT/DELETE | 课程管理 |
 | `/api/semesters/` | GET/POST/PUT/DELETE | 学期管理 |
 | `/api/class-courses/` | GET/POST/DELETE | 课程分配 |
-| `/api/schedules/by_semester/?semester_id=` | GET | 按学期查询课表 |
-| `/api/schedules/by_class/?semester_id=&class_id=` | GET | 按班级查询课表 |
-| `/api/schedules/by_teacher/?semester_id=&teacher_id=` | GET | 按教师查询课表 |
-| `/api/schedules/by_classroom/?semester_id=&classroom_id=` | GET | 按教室查询课表 |
+| `/api/schedules/by_semester/?semester_id=&date=` | GET | 按学期查询指定日期课表 |
+| `/api/schedules/by_class/?semester_id=&class_id=&date=` | GET | 按班级查询指定日期课表 |
+| `/api/schedules/by_teacher/?semester_id=&teacher_id=&date=` | GET | 按教师查询指定日期课表 |
+| `/api/schedules/by_classroom/?semester_id=&classroom_id=&date=` | GET | 按教室查询指定日期课表 |
 | `/api/schedules/auto_schedule/` | POST | 执行自动排课 |
 | `/api/schedules/swap/` | POST | 交换两个课表条目 |
-| `/api/schedules/substitute/` | POST | 安排代课教师 |
-| `/api/schedules/export_pdf/?type=&id=&semester_id=` | GET | 导出 PDF 课表 |
+| `/api/schedules/substitute/` | POST | 登记带起止日期的代课教师；同一节课再次登记会顶掉原代课段，时间冲突会返回具体课程信息 |
+| `/api/schedules/export_pdf/?type=&id=&semester_id=&date=` | GET | 导出指定日期的 PDF 课表 |
 | `/api/conflicts/` | GET | 查询冲突列表 |
 
 ## License
