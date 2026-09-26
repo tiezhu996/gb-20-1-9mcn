@@ -1,9 +1,12 @@
+from datetime import datetime
 from django.http import HttpResponse
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
 from django.db import transaction
+from django.db.models import Q
+from django.utils import timezone
 from core.models import Semester, Classroom, Teacher, Class
 from .models import (
     ClassCourse, ScheduleEntry, Conflict, SwapRequest, Substitute
@@ -41,6 +44,44 @@ class ScheduleEntryViewSet(viewsets.ModelViewSet):
             return ScheduleEntryDetailSerializer
         return ScheduleEntrySerializer
 
+    def _parse_ref_date(self, request):
+        """课表是周视图，代课是否生效需要一个参考日期：
+        ?date=YYYY-MM-DD，缺省取今天。"""
+        date_str = request.query_params.get('date')
+        if not date_str:
+            return timezone.localdate(), None
+        try:
+            return datetime.strptime(date_str, '%Y-%m-%d').date(), None
+        except ValueError:
+            return None, Response(
+                {'error': 'date 格式应为 YYYY-MM-DD'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+    def _attach_active_substitutes(self, entries, ref_date):
+        """给每节课挂载 ref_date 当天生效的代课记录（_active_substitute）。
+        课表条目本身永不被代课修改，是否代课完全由 Substitute 的起止日期决定，
+        因此代课期一过，课表自动回到原老师。"""
+        entries = list(entries)
+        subs = Substitute.objects.filter(
+            affected_entry_id__in=[e.id for e in entries],
+            is_active=True,
+            start_date__lte=ref_date,
+            end_date__gte=ref_date,
+        ).select_related('substitute_teacher', 'original_teacher')
+        sub_map = {s.affected_entry_id: s for s in subs}
+        for e in entries:
+            e._active_substitute = sub_map.get(e.id)
+        return entries
+
+    def _serialize_entries(self, entries, request):
+        ref_date, error = self._parse_ref_date(request)
+        if error:
+            return error
+        entries = self._attach_active_substitutes(entries, ref_date)
+        serializer = ScheduleEntryDetailSerializer(entries, many=True)
+        return Response(serializer.data)
+
     @action(detail=False, methods=['get'])
     def by_semester(self, request):
         semester_id = request.query_params.get('semester_id')
@@ -50,22 +91,36 @@ class ScheduleEntryViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
         entries = self.queryset.filter(semester_id=semester_id)
-        serializer = ScheduleEntryDetailSerializer(entries, many=True)
-        return Response(serializer.data)
+        return self._serialize_entries(entries, request)
 
     @action(detail=False, methods=['get'])
     def by_class(self, request):
         semester_id = request.query_params.get('semester_id')
         class_id = request.query_params.get('class_id')
         entries = self.queryset.filter(semester_id=semester_id, class_id=class_id)
-        serializer = ScheduleEntryDetailSerializer(entries, many=True)
-        return Response(serializer.data)
+        return self._serialize_entries(entries, request)
 
     @action(detail=False, methods=['get'])
     def by_teacher(self, request):
         semester_id = request.query_params.get('semester_id')
         teacher_id = request.query_params.get('teacher_id')
-        entries = self.queryset.filter(semester_id=semester_id, teacher_id=teacher_id)
+        ref_date, error = self._parse_ref_date(request)
+        if error:
+            return error
+        # 原老师的课表始终包含自己的课（代课只叠加标记，不移除）；
+        # 代课老师在代课期内也能看到自己要代的课。
+        subbed_entry_ids = Substitute.objects.filter(
+            semester_id=semester_id,
+            substitute_teacher_id=teacher_id,
+            is_active=True,
+            start_date__lte=ref_date,
+            end_date__gte=ref_date,
+        ).values_list('affected_entry_id', flat=True)
+        entries = self.queryset.filter(
+            Q(teacher_id=teacher_id) | Q(id__in=subbed_entry_ids),
+            semester_id=semester_id,
+        )
+        entries = self._attach_active_substitutes(entries, ref_date)
         serializer = ScheduleEntryDetailSerializer(entries, many=True)
         return Response(serializer.data)
 
@@ -74,8 +129,7 @@ class ScheduleEntryViewSet(viewsets.ModelViewSet):
         semester_id = request.query_params.get('semester_id')
         classroom_id = request.query_params.get('classroom_id')
         entries = self.queryset.filter(semester_id=semester_id, classroom_id=classroom_id)
-        serializer = ScheduleEntryDetailSerializer(entries, many=True)
-        return Response(serializer.data)
+        return self._serialize_entries(entries, request)
 
     @action(detail=False, methods=['post'])
     def auto_schedule(self, request):
@@ -269,6 +323,41 @@ class ScheduleEntryViewSet(viewsets.ModelViewSet):
 
         return Response({'status': 'success', 'message': 'Swap completed'})
 
+    def _find_substitute_conflicts(self, entry, substitute_teacher,
+                                   start_date, end_date):
+        """检查代课老师在同一时段（同学期、同星期几、同节次）的已有课。
+        返回与代课期冲突的课条目列表。"""
+        slot_entries = ScheduleEntry.objects.filter(
+            semester=entry.semester,
+            day_of_week=entry.day_of_week,
+            period=entry.period,
+        ).exclude(id=entry.id).select_related('course', 'class_id', 'teacher')
+
+        conflicts = []
+        for other in slot_entries:
+            if other.teacher_id == substitute_teacher.id:
+                # 他自己的课：若整段代课期都被别人代掉，则他其实有空
+                fully_covered = Substitute.objects.filter(
+                    affected_entry=other,
+                    is_active=True,
+                    start_date__lte=start_date,
+                    end_date__gte=end_date,
+                ).exists()
+                if not fully_covered:
+                    conflicts.append(other)
+                    continue
+            # 他已答应在同一时段给别人代课（日期有重叠）
+            already_subbing = Substitute.objects.filter(
+                affected_entry=other,
+                substitute_teacher=substitute_teacher,
+                is_active=True,
+                start_date__lte=end_date,
+                end_date__gte=start_date,
+            ).exists()
+            if already_subbing:
+                conflicts.append(other)
+        return conflicts
+
     @action(detail=False, methods=['post'])
     def substitute(self, request):
         req_serializer = SubstituteRequestSerializer(data=request.data)
@@ -282,7 +371,9 @@ class ScheduleEntryViewSet(viewsets.ModelViewSet):
         reason = req_serializer.validated_data['reason']
 
         try:
-            entry = ScheduleEntry.objects.get(id=entry_id)
+            entry = ScheduleEntry.objects.select_related(
+                'course', 'class_id', 'teacher', 'semester'
+            ).get(id=entry_id)
             substitute_teacher = Teacher.objects.get(id=substitute_teacher_id)
         except (ScheduleEntry.DoesNotExist, Teacher.DoesNotExist):
             return Response(
@@ -290,12 +381,37 @@ class ScheduleEntryViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        original_teacher = entry.teacher
+        if substitute_teacher.id == entry.teacher_id:
+            return Response(
+                {'error': '代课老师不能与原授课老师相同'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        conflicts = self._find_substitute_conflicts(
+            entry, substitute_teacher, start_date, end_date
+        )
+        if conflicts:
+            slot = f"周{entry.day_of_week}第{entry.period}节"
+            details = '；'.join(
+                f"{c.class_id.name}《{c.course.name}》（{slot}）"
+                for c in conflicts
+            )
+            return Response({
+                'error': (
+                    f"{substitute_teacher.name} 在{slot}已有其他课，"
+                    f"无法代课：{details}"
+                ),
+                'conflicting_entry_ids': [c.id for c in conflicts],
+            }, status=status.HTTP_400_BAD_REQUEST)
 
         with transaction.atomic():
-            Substitute.objects.create(
+            # 同一节课再登记一段就顶掉上一段
+            Substitute.objects.filter(
+                affected_entry=entry, is_active=True
+            ).update(is_active=False)
+            substitute = Substitute.objects.create(
                 semester=entry.semester,
-                original_teacher=original_teacher,
+                original_teacher=entry.teacher,
                 substitute_teacher=substitute_teacher,
                 affected_entry=entry,
                 start_date=start_date,
@@ -303,12 +419,17 @@ class ScheduleEntryViewSet(viewsets.ModelViewSet):
                 reason=reason
             )
 
-            entry.original_teacher = original_teacher
-            entry.teacher = substitute_teacher
-            entry.save()
-
+        entry._active_substitute = (
+            substitute
+            if substitute.start_date <= timezone.localdate() <= substitute.end_date
+            else None
+        )
         serializer = ScheduleEntryDetailSerializer(entry)
-        return Response({'status': 'success', 'entry': serializer.data})
+        return Response({
+            'status': 'success',
+            'entry': serializer.data,
+            'substitute': SubstituteSerializer(substitute).data,
+        })
 
     @action(detail=False, methods=['get'])
     def export_pdf(self, request):

@@ -2,6 +2,8 @@ import { Component, OnInit, ViewChild, ElementRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { MatSelectModule } from '@angular/material/select';
+import { MatFormFieldModule } from '@angular/material/form-field';
+import { MatInputModule } from '@angular/material/input';
 import { MatButtonModule } from '@angular/material/button';
 import { MatCheckboxModule } from '@angular/material/checkbox';
 import { MatCardModule } from '@angular/material/card';
@@ -25,6 +27,8 @@ import type {
     CommonModule,
     FormsModule,
     MatSelectModule,
+    MatFormFieldModule,
+    MatInputModule,
     MatButtonModule,
     MatCheckboxModule,
     MatCardModule,
@@ -83,6 +87,11 @@ import type {
             </mat-option>
           </mat-select>
         </mat-form-field>
+
+        <mat-form-field class="filter-select">
+          <mat-label>查看日期（默认今天）</mat-label>
+          <input matInput type="date" [(ngModel)]="viewDate" (change)="loadSchedules()">
+        </mat-form-field>
       </div>
 
       <div class="action-bar">
@@ -107,6 +116,43 @@ import type {
           导出图片
         </button>
       </div>
+
+      <mat-card *ngIf="substituteEntry" style="margin-bottom: 16px;">
+        <mat-card-content>
+          <h3 style="margin-top: 0;">
+            登记代课：{{ substituteEntry.class_name }}《{{ substituteEntry.course_name }}》
+            周{{ substituteEntry.day_of_week }}第{{ substituteEntry.period }}节
+            （原授课：{{ substituteEntry.teacher_name }}）
+          </h3>
+          <div style="display: flex; gap: 16px; flex-wrap: wrap; align-items: center;">
+            <mat-form-field style="min-width: 160px;">
+              <mat-label>代课老师</mat-label>
+              <mat-select [(value)]="substituteTeacherId">
+                <mat-option *ngFor="let t of substituteCandidates" [value]="t.id">
+                  {{ t.name }}（{{ t.subject }}）
+                </mat-option>
+              </mat-select>
+            </mat-form-field>
+            <mat-form-field>
+              <mat-label>开始日期</mat-label>
+              <input matInput type="date" [(ngModel)]="substituteStart">
+            </mat-form-field>
+            <mat-form-field>
+              <mat-label>结束日期</mat-label>
+              <input matInput type="date" [(ngModel)]="substituteEnd">
+            </mat-form-field>
+            <mat-form-field style="min-width: 220px;">
+              <mat-label>代课原因</mat-label>
+              <input matInput [(ngModel)]="substituteReason" placeholder="如：病假、事假">
+            </mat-form-field>
+            <button mat-raised-button color="primary" (click)="submitSubstitute()">确定</button>
+            <button mat-button (click)="cancelSubstitute()">取消</button>
+          </div>
+          <p *ngIf="substituteError" style="color: #d32f2f; margin: 8px 0 0;">
+            {{ substituteError }}
+          </p>
+        </mat-card-content>
+      </mat-card>
 
       <div class="timetable-container" #timetableContainer>
         <div *ngIf="schedules.length > 0">
@@ -136,15 +182,24 @@ import type {
                         class="schedule-card"
                         [class.conflict-entry]="entry.is_conflict"
                         [class.locked-entry]="entry.is_locked"
+                        [class.substitute-entry]="entry.is_substituted"
                         style="margin-bottom: 4px;"
                       >
                         <div class="schedule-course">{{ entry.course_name }}</div>
-                        <div class="schedule-detail">{{ entry.teacher_name }}</div>
+                        <div class="schedule-detail">
+                          {{ entry.is_substituted ? entry.effective_teacher_name : entry.teacher_name }}
+                          <span *ngIf="entry.is_substituted">（代）</span>
+                        </div>
+                        <div class="schedule-detail" *ngIf="entry.is_substituted">
+                          原：{{ entry.teacher_name }}
+                          （{{ entry.substitute_start_date }} ~ {{ entry.substitute_end_date }}）
+                        </div>
                         <div class="schedule-detail">{{ entry.classroom_name }}</div>
                         <div class="schedule-detail">{{ entry.class_name }}</div>
                         <div style="margin-top: 4px; display: flex; gap: 4px; flex-wrap: wrap;">
                           <mat-chip *ngIf="entry.is_locked" color="accent" selected>锁定</mat-chip>
                           <mat-chip *ngIf="entry.is_conflict" color="warn" selected>冲突</mat-chip>
+                          <mat-chip *ngIf="entry.is_substituted" color="primary" selected>代课</mat-chip>
                           <button
                             mat-icon-button
                             size="small"
@@ -152,6 +207,14 @@ import type {
                             [title]="entry.is_locked ? '解锁' : '锁定'"
                           >
                             <mat-icon>{{ entry.is_locked ? 'lock' : 'lock_open' }}</mat-icon>
+                          </button>
+                          <button
+                            mat-icon-button
+                            size="small"
+                            (click)="openSubstituteForm(entry)"
+                            title="登记代课"
+                          >
+                            <mat-icon>swap_horiz</mat-icon>
                           </button>
                         </div>
                       </mat-card>
@@ -197,6 +260,14 @@ export class TimetableComponent implements OnInit {
   viewMode: 'class' | 'teacher' | 'classroom' = 'class';
   schedulingMessage: string = '';
   currentSemester: Semester | null = null;
+  viewDate: string = '';
+
+  substituteEntry: ScheduleEntry | null = null;
+  substituteTeacherId: number | null = null;
+  substituteStart: string = '';
+  substituteEnd: string = '';
+  substituteReason: string = '';
+  substituteError: string = '';
 
   weekDays = ['星期一', '星期二', '星期三', '星期四', '星期五'];
   periods = [
@@ -302,15 +373,16 @@ export class TimetableComponent implements OnInit {
   loadSchedules(): void {
     if (!this.selectedSemesterId) return;
 
+    const date = this.viewDate || undefined;
     let obs;
     if (this.viewMode === 'class' && this.selectedClassId) {
-      obs = this.api.getSchedulesByClass(this.selectedSemesterId, this.selectedClassId);
+      obs = this.api.getSchedulesByClass(this.selectedSemesterId, this.selectedClassId, date);
     } else if (this.viewMode === 'teacher' && this.selectedTeacherId) {
-      obs = this.api.getSchedulesByTeacher(this.selectedSemesterId, this.selectedTeacherId);
+      obs = this.api.getSchedulesByTeacher(this.selectedSemesterId, this.selectedTeacherId, date);
     } else if (this.viewMode === 'classroom' && this.selectedClassroomId) {
-      obs = this.api.getSchedulesByClassroom(this.selectedSemesterId, this.selectedClassroomId);
+      obs = this.api.getSchedulesByClassroom(this.selectedSemesterId, this.selectedClassroomId, date);
     } else {
-      obs = this.api.getSchedulesBySemester(this.selectedSemesterId);
+      obs = this.api.getSchedulesBySemester(this.selectedSemesterId, date);
     }
 
     obs.subscribe(data => {
@@ -346,6 +418,49 @@ export class TimetableComponent implements OnInit {
   toggleLock(entry: ScheduleEntry): void {
     this.api.updateScheduleEntry(entry.id, { is_locked: !entry.is_locked }).subscribe(() => {
       entry.is_locked = !entry.is_locked;
+    });
+  }
+
+  get substituteCandidates(): Teacher[] {
+    if (!this.substituteEntry) return this.teachers;
+    return this.teachers.filter(t => t.id !== this.substituteEntry!.teacher);
+  }
+
+  openSubstituteForm(entry: ScheduleEntry): void {
+    this.substituteEntry = entry;
+    this.substituteTeacherId = null;
+    this.substituteStart = '';
+    this.substituteEnd = '';
+    this.substituteReason = '';
+    this.substituteError = '';
+  }
+
+  cancelSubstitute(): void {
+    this.substituteEntry = null;
+    this.substituteError = '';
+  }
+
+  submitSubstitute(): void {
+    if (!this.substituteEntry) return;
+    if (!this.substituteTeacherId || !this.substituteStart || !this.substituteEnd) {
+      this.substituteError = '请选择代课老师并填写开始、结束日期';
+      return;
+    }
+    this.api.assignSubstitute(
+      this.substituteEntry.id,
+      this.substituteTeacherId,
+      this.substituteStart,
+      this.substituteEnd,
+      this.substituteReason
+    ).subscribe({
+      next: () => {
+        this.schedulingMessage = '代课登记成功，代课期结束后将自动恢复原老师';
+        this.cancelSubstitute();
+        this.loadSchedules();
+      },
+      error: (err) => {
+        this.substituteError = err?.error?.error || '代课登记失败';
+      }
     });
   }
 

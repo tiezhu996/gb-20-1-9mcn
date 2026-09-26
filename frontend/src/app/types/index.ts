@@ -83,6 +83,11 @@ export interface ScheduleEntry {
   conflict_type?: string;
   original_teacher?: number;
   original_teacher_name?: string;
+  is_substituted?: boolean;
+  effective_teacher?: number;
+  effective_teacher_name?: string;
+  substitute_start_date?: string;
+  substitute_end_date?: string;
   course_name?: string;
   teacher_name?: string;
   classroom_name?: string;

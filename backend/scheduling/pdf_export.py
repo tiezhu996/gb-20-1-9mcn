@@ -7,7 +7,20 @@ from reportlab.platypus import (
 )
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER
-from .models import ScheduleEntry
+from django.utils import timezone
+from .models import ScheduleEntry, Substitute
+
+
+def _active_substitute_map(entries, ref_date=None):
+    """{entry_id: Substitute} —— ref_date（默认今天）生效的代课记录。"""
+    ref_date = ref_date or timezone.localdate()
+    subs = Substitute.objects.filter(
+        affected_entry_id__in=[e.id for e in entries],
+        is_active=True,
+        start_date__lte=ref_date,
+        end_date__gte=ref_date,
+    ).select_related('substitute_teacher')
+    return {s.affected_entry_id: s for s in subs}
 
 
 def generate_class_timetable_pdf(class_obj, semester):
@@ -49,7 +62,8 @@ def generate_class_timetable_pdf(class_obj, semester):
 
     periods = []
     for p in semester.daily_periods:
-        periods.append(f"{p.get('name', f'第{p.get('order', len(periods)+1)}节')}")
+        default_name = '第{}节'.format(p.get('order', len(periods) + 1))
+        periods.append(p.get('name', default_name))
     if not periods:
         periods = [f'第{i+1}节' for i in range(7)]
 
@@ -60,19 +74,25 @@ def generate_class_timetable_pdf(class_obj, semester):
             row.append('')
         schedule_grid.append(row)
 
-    entries = ScheduleEntry.objects.filter(
+    entries = list(ScheduleEntry.objects.filter(
         class_id=class_obj,
         semester=semester
-    ).select_related('course', 'teacher', 'classroom')
+    ).select_related('course', 'teacher', 'classroom'))
+    sub_map = _active_substitute_map(entries)
 
     for entry in entries:
         try:
             row_idx = entry.period
             col_idx = entry.day_of_week
             if 1 <= row_idx <= len(periods) and 1 <= col_idx <= len(days):
+                sub = sub_map.get(entry.id)
+                teacher_line = (
+                    f"{sub.substitute_teacher.name}（代{entry.teacher.name}）"
+                    if sub else entry.teacher.name
+                )
                 content = (
                     f"{entry.course.name}\n"
-                    f"{entry.teacher.name}\n"
+                    f"{teacher_line}\n"
                     f"{entry.classroom.name}"
                 )
                 schedule_grid[row_idx][col_idx] = content
@@ -136,7 +156,8 @@ def generate_teacher_timetable_pdf(teacher, semester):
 
     periods = []
     for p in semester.daily_periods:
-        periods.append(f"{p.get('name', f'第{p.get('order', len(periods)+1)}节')}")
+        default_name = '第{}节'.format(p.get('order', len(periods) + 1))
+        periods.append(p.get('name', default_name))
     if not periods:
         periods = [f'第{i+1}节' for i in range(7)]
 
@@ -147,18 +168,50 @@ def generate_teacher_timetable_pdf(teacher, semester):
             row.append('')
         schedule_grid.append(row)
 
-    entries = ScheduleEntry.objects.filter(
+    entries = list(ScheduleEntry.objects.filter(
         teacher=teacher,
         semester=semester
-    ).select_related('course', 'class_id', 'classroom')
+    ).select_related('course', 'class_id', 'classroom'))
+    sub_map = _active_substitute_map(entries)
+
+    # 该老师今天正在代的课也并入他的课表
+    subbing_ids = Substitute.objects.filter(
+        semester=semester,
+        substitute_teacher=teacher,
+        is_active=True,
+        start_date__lte=timezone.localdate(),
+        end_date__gte=timezone.localdate(),
+    ).values_list('affected_entry_id', flat=True)
+    subbing_entries = list(ScheduleEntry.objects.filter(
+        id__in=subbing_ids
+    ).select_related('course', 'class_id', 'classroom', 'teacher'))
 
     for entry in entries:
         try:
             row_idx = entry.period
             col_idx = entry.day_of_week
             if 1 <= row_idx <= len(periods) and 1 <= col_idx <= len(days):
+                sub = sub_map.get(entry.id)
+                course_line = (
+                    f"{entry.course.name}（{sub.substitute_teacher.name}代）"
+                    if sub else entry.course.name
+                )
                 content = (
-                    f"{entry.course.name}\n"
+                    f"{course_line}\n"
+                    f"{entry.class_id.name}\n"
+                    f"{entry.classroom.name}"
+                )
+                schedule_grid[row_idx][col_idx] = content
+        except IndexError:
+            continue
+
+    for entry in subbing_entries:
+        try:
+            row_idx = entry.period
+            col_idx = entry.day_of_week
+            if 1 <= row_idx <= len(periods) and 1 <= col_idx <= len(days):
+                content = (
+                    f"{entry.course.name}（代{entry.teacher.name}）\n"
                     f"{entry.class_id.name}\n"
                     f"{entry.classroom.name}"
                 )
@@ -223,7 +276,8 @@ def generate_classroom_timetable_pdf(classroom, semester):
 
     periods = []
     for p in semester.daily_periods:
-        periods.append(f"{p.get('name', f'第{p.get('order', len(periods)+1)}节')}")
+        default_name = '第{}节'.format(p.get('order', len(periods) + 1))
+        periods.append(p.get('name', default_name))
     if not periods:
         periods = [f'第{i+1}节' for i in range(7)]
 
@@ -234,20 +288,26 @@ def generate_classroom_timetable_pdf(classroom, semester):
             row.append('')
         schedule_grid.append(row)
 
-    entries = ScheduleEntry.objects.filter(
+    entries = list(ScheduleEntry.objects.filter(
         classroom=classroom,
         semester=semester
-    ).select_related('course', 'class_id', 'teacher')
+    ).select_related('course', 'class_id', 'teacher'))
+    sub_map = _active_substitute_map(entries)
 
     for entry in entries:
         try:
             row_idx = entry.period
             col_idx = entry.day_of_week
             if 1 <= row_idx <= len(periods) and 1 <= col_idx <= len(days):
+                sub = sub_map.get(entry.id)
+                teacher_line = (
+                    f"{sub.substitute_teacher.name}（代{entry.teacher.name}）"
+                    if sub else entry.teacher.name
+                )
                 content = (
                     f"{entry.course.name}\n"
                     f"{entry.class_id.name}\n"
-                    f"{entry.teacher.name}"
+                    f"{teacher_line}"
                 )
                 schedule_grid[row_idx][col_idx] = content
         except IndexError:
